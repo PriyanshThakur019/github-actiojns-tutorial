@@ -12,7 +12,7 @@ public class DemoController {
     private DemoService demoService;
 
     @GetMapping("/getDummyResult")
-        public String getDummyResult(@RequestBody String input) {
-        return demoService.getDemoResults(input);
+        public String getDummyResult() {
+        return demoService.getDemoResults();
     }
 }
