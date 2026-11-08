@@ -6,6 +6,6 @@ import org.springframework.stereotype.Service;
 public class DemoService {
 
     public String getDemoResults() {
-        return "Hi this is demo service v2 with input ";
+        return "Hi this is self deployed service with github actions";
     }
 }
