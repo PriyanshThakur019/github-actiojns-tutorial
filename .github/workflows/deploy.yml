@@ -30,56 +30,90 @@ jobs:
       - name: Build with Maven
         run: ./mvnw clean verify
 
-      # 4. Connect to VM and deploy
+      # 4. Setup Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 5. Login to Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 6. Build and push Docker image
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            priyansh019/github-actions-tutorial:latest
+            priyansh019/github-actions-tutorial:${{ github.sha }}
+
+      # 7. Deploy to Google Cloud VM
       - name: Deploy to Google Cloud VM
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          command_timeout: 10m
+          command_timeout: 15m
           script: |
             set -e
 
             cd ${{ secrets.SERVER_PATH }}
 
-            # Save currently deployed commit
+            # Save previous commit and currently running image
             PREVIOUS_COMMIT=$(git rev-parse HEAD)
+            PREVIOUS_TAG="$PREVIOUS_COMMIT"
 
-            # Pull latest code
+            CURRENT_IMAGE_ID=$(sudo docker inspect \
+              --format='{{.Image}}' github-actions-tutorial)
+
+            # Preserve the running image for rollback
+            sudo docker tag "$CURRENT_IMAGE_ID" \
+              "priyansh019/github-actions-tutorial:$PREVIOUS_TAG"
+
+            # Pull latest source code
             git pull origin main
 
-            # Attempt deployment
-            if ! sudo docker compose up -d --build; then
-              echo "Deployment failed. Rolling back..."
+            # New image version
+            IMAGE_TAG=${{ github.sha }}
 
-              git reset --hard "$PREVIOUS_COMMIT"
-              sudo docker compose up -d --build
-
+            # Pull and deploy new image
+            if ! sudo IMAGE_TAG="$IMAGE_TAG" docker compose pull; then
+              echo "Image pull failed. Rolling back..."
+              sudo IMAGE_TAG="$PREVIOUS_TAG" docker compose up -d
               exit 1
             fi
 
-            # Wait for application to become responsive
+            if ! sudo IMAGE_TAG="$IMAGE_TAG" docker compose up -d; then
+              echo "Deployment failed. Rolling back..."
+              sudo IMAGE_TAG="$PREVIOUS_TAG" docker compose up -d
+              exit 1
+            fi
+
+            # Health check: 120 attempts x 5 seconds = 600 seconds
             echo "Checking application health..."
 
             HEALTHY=false
 
-            for i in $(seq 1 80); do
+            for i in $(seq 1 120); do
               if curl -fsS http://localhost:8080/getDummyResult > /dev/null; then
                 HEALTHY=true
                 break
               fi
 
-              echo "Waiting for application... Attempt $i/40"
+              echo "Waiting for application... Attempt $i/120"
               sleep 5
             done
 
             # Rollback if health check fails
             if [ "$HEALTHY" = false ]; then
-              echo "Application health check failed. Rolling back..."
+              echo "Health check failed. Rolling back..."
 
-              git reset --hard "$PREVIOUS_COMMIT"
-              sudo docker compose up -d --build
+              sudo IMAGE_TAG="$PREVIOUS_TAG" docker compose up -d
 
               exit 1
             fi
