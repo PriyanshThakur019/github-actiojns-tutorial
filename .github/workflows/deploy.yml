@@ -42,4 +42,3 @@ jobs:
             git pull origin main
             sudo docker compose up -d --build
             sudo docker compose ps
-
