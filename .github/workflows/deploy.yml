@@ -37,9 +37,52 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 10m
           script: |
-            cd ${{ secrets.SERVER_PATH }}
-            git pull origin main
-            sudo docker compose up -d --build
-            sudo docker compose ps
+            set -e
 
+            cd ${{ secrets.SERVER_PATH }}
+
+            # Save currently deployed commit
+            PREVIOUS_COMMIT=$(git rev-parse HEAD)
+
+            # Pull latest code
+            git pull origin main
+
+            # Attempt deployment
+            if ! sudo docker compose up -d --build; then
+              echo "Deployment failed. Rolling back..."
+
+              git reset --hard "$PREVIOUS_COMMIT"
+              sudo docker compose up -d --build
+
+              exit 1
+            fi
+
+            # Wait for application to become responsive
+            echo "Checking application health..."
+
+            HEALTHY=false
+
+            for i in $(seq 1 80); do
+              if curl -fsS http://localhost:8080/getDummyResult > /dev/null; then
+                HEALTHY=true
+                break
+              fi
+
+              echo "Waiting for application... Attempt $i/40"
+              sleep 5
+            done
+
+            # Rollback if health check fails
+            if [ "$HEALTHY" = false ]; then
+              echo "Application health check failed. Rolling back..."
+
+              git reset --hard "$PREVIOUS_COMMIT"
+              sudo docker compose up -d --build
+
+              exit 1
+            fi
+
+            echo "Deployment successful!"
+            sudo docker compose ps
